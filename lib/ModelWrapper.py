@@ -14,6 +14,15 @@ class ModelWrapper(object):
         inputs, targets = inputs.to(self.device), targets.to(self.device)
         self.optimizer.zero_grad()
         outputs = self.model(inputs)
+        if outputs.shape[1] == 1:
+            targets = 2.0 * (targets > 4).float() - 1.0
+            loss = torch.log(1 + torch.exp(-targets * outputs[:, 0])).mean()
+            loss.backward()
+            self.optimizer.step()
+            correct = (torch.sign(outputs[:, 0]) == targets).sum().item()
+            acc = correct / targets.size(0)
+            return loss.item(), acc, correct
+
         loss = self.criterion(outputs, targets)
         loss.backward()
         self.optimizer.step()
@@ -40,6 +49,12 @@ class ModelWrapper(object):
     def eval_on_batch(self, inputs, targets):
         inputs, targets = inputs.to(self.device), targets.to(self.device)
         outputs = self.model(inputs)
+        if outputs.shape[1] == 1:
+            targets = 2.0 * (targets > 4).float() - 1.0
+            loss = torch.log(1 + torch.exp(-targets * outputs[:, 0])).mean()
+            correct = (torch.sign(outputs[:, 0]) == targets).sum().item()
+            return loss.item(), correct
+
         loss = self.criterion(outputs, targets)
         _, predicted = outputs.max(1)
         correct = predicted.eq(targets).sum().item()

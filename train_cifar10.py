@@ -6,6 +6,11 @@ from archs.cifar10 import vgg, resnet
 import numpy as np
 import random
 import os
+from nngeometry.generator.jacobian import Jacobian
+from nngeometry.layercollection import LayerCollection
+from torch.utils.data import TensorDataset, DataLoader
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 data_name = 'cifar10'
 model_name = 'resnet'
@@ -13,10 +18,11 @@ model_name = 'resnet'
 # setting
 lr = 1e-4
 train_batch_size = 128
-train_epoch = 4000
+train_epoch = 100
 eval_batch_size = 256
 label_noise = 0.15
 k = 64
+num_classes = 1
 
 
 dataset = datasets.CIFAR10
@@ -29,12 +35,12 @@ eval_transform = transforms.Compose([transforms.ToTensor()])
 if model_name == 'vgg16':
     model = vgg.vgg16_bn()
 elif model_name == 'resnet':
-    model = resnet.resnet18(k)
+    model = resnet.resnet18(k, num_classes)
 else:
     raise Exception("No such model!")
 
 # load data
-train_data = dataset('D:/Datasets', train=True, transform=train_transform)
+train_data = dataset('D:/Datasets', train=True, transform=train_transform, download=True)
 train_targets = np.array(train_data.targets)
 data_size = len(train_targets)
 random_index = random.sample(range(data_size), int(data_size*label_noise))
@@ -43,12 +49,12 @@ np.random.shuffle(random_part)
 train_targets[random_index] = random_part
 train_data.targets = train_targets.tolist()
 
-noise_data = dataset('D:/Datasets', train=True, transform=train_transform)
+noise_data = dataset('D:/Datasets', train=True, transform=train_transform, download=True)
 noise_data.targets = random_part.tolist()
 noise_data.data = train_data.data[random_index]
 
 
-test_data = dataset('D:/Datasets', train=False, transform=eval_transform)
+test_data = dataset('D:/Datasets', train=False, transform=eval_transform, download=True)
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=train_batch_size, shuffle=True, num_workers=0,
                                            drop_last=False)
 noise_loader = torch.utils.data.DataLoader(noise_data, batch_size=train_batch_size, shuffle=False, num_workers=0,
@@ -59,6 +65,38 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=eval_batch_size,
 # build model
 device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
+
+
+
+
+if True:
+    def output_fn(input, target):
+        # input = input.to('cuda')
+        return model(input)
+
+    layer_collection = LayerCollection.from_model(model)
+    layer_collection.numel()
+
+    it = iter(test_loader)
+    X, y = it.__next__()
+    X = X.cuda()
+    y = y.cuda()
+    batch = TensorDataset(X, y)
+    batch_loader = DataLoader(batch)
+    generator = Jacobian(layer_collection=layer_collection,
+                         model=model,
+                         loader=batch_loader,
+                         function=output_fn,
+                         n_output=1)
+    jac = generator.get_jacobian()[0]
+    mean = jac.mean(0, keepdim=True)
+    sq_mean = (jac ** 2).mean(0, keepdim=True)
+    to_save = torch.cat((mean, sq_mean))
+    np.save('bin_' + str(k), to_save.data.cpu().numpy())
+
+
+
+
 
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)

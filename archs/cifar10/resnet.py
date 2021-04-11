@@ -128,10 +128,10 @@ class ResNet(nn.Module):
 
         return output 
 
-def resnet18(k=64):
+def resnet18(k=64, num_classes=10):
     """ return a ResNet 18 object
     """
-    return ResNet(BasicBlock, [2, 2, 2, 2], k)
+    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes, k)
 
 def resnet34(k=64):
     """ return a ResNet 34 object
