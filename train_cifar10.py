@@ -1,3 +1,4 @@
+import sys
 from lib.ModelWrapper import ModelWrapper
 from tensorboardX import SummaryWriter
 import torch
@@ -8,9 +9,11 @@ import random
 import os
 from nngeometry.generator.jacobian import Jacobian
 from nngeometry.layercollection import LayerCollection
+from nngeometry.object.vector import PVector
 from torch.utils.data import TensorDataset, DataLoader
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 data_name = 'cifar10'
 model_name = 'resnet'
@@ -18,10 +21,12 @@ model_name = 'resnet'
 # setting
 lr = 1e-4
 train_batch_size = 128
-train_epoch = 100
+train_epoch = 1200
 eval_batch_size = 256
-label_noise = 0.15
-k = 64
+# label_noise = 0.15
+k = int(sys.argv[1])
+label_noise = float(sys.argv[2])
+# k = 64
 num_classes = 1
 
 
@@ -70,6 +75,19 @@ model = model.to(device)
 
 
 if True:
+    # print('load')
+    # id_epoch = ''
+    # model.load_state_dict(torch.load('/home/pezeshki/scratch/dd/Deep-Double-Descent/runs2/cifar10/resnet_' + str(int(label_noise*100)) + '_k' + str(k) + '/ckpt' + str(id_epoch) + '.pkl')['net'])
+
+    # flat_params = []
+    # for p in model.parameters():
+    #     flat_params += [p.view(-1)]
+    # flat_params = torch.cat(flat_params)
+    flat_params = PVector.from_model(model).get_flat_representation()
+    sums = torch.zeros(*flat_params.shape).cuda()
+    sums_sqr = torch.zeros(*flat_params.shape).cuda()
+
+    model.eval()
     def output_fn(input, target):
         # input = input.to('cuda')
         return model(input)
@@ -77,23 +95,44 @@ if True:
     layer_collection = LayerCollection.from_model(model)
     layer_collection.numel()
 
-    it = iter(test_loader)
-    X, y = it.__next__()
-    X = X.cuda()
-    y = y.cuda()
-    batch = TensorDataset(X, y)
-    batch_loader = DataLoader(batch)
-    generator = Jacobian(layer_collection=layer_collection,
-                         model=model,
-                         loader=batch_loader,
-                         function=output_fn,
-                         n_output=1)
-    jac = generator.get_jacobian()[0]
-    mean = jac.mean(0, keepdim=True)
-    sq_mean = (jac ** 2).mean(0, keepdim=True)
-    to_save = torch.cat((mean, sq_mean))
-    np.save('bin_' + str(k), to_save.data.cpu().numpy())
+    # loader = torch.utils.data.DataLoader(
+    #     test_data, batch_size=150, shuffle=False, num_workers=0,
+    #     drop_last=False)
+    loader = torch.utils.data.DataLoader(train_data, batch_size=train_batch_size, shuffle=True, num_workers=0,
+                                         drop_last=False)
 
+    it = iter(loader)
+
+    for X, y in tqdm(it):
+
+        X = X.cuda()
+        y = y.cuda()
+        batch = TensorDataset(X, y)
+        batch_loader = DataLoader(batch)
+        generator = Jacobian(layer_collection=layer_collection,
+                             model=model,
+                             # loader=batch_loader,
+                             function=output_fn,
+                             n_output=1)
+        jac = generator.get_jacobian(examples=batch_loader)[0]
+        sums += jac.sum(0)
+        sums_sqr = (jac ** 2).sum(0)
+
+    std = torch.sqrt((sums_sqr / sums.shape[0]) - (sums / sums.shape[0]) ** 2)
+    np.save('All_train4_'+str(k)+'_E0', std.data.cpu().numpy())
+
+        # to_save = torch.cat((mean, sq_mean))
+        # np.save('bin_' + str(k), to_save.data.cpu().numpy())
+        # std = jac.std(0).data.cpu().numpy()[:, None]
+        # flat_params = flat_params.data.cpu().numpy()[:, None]
+        # np.save('bin_' + str(label_noise) + '_' + str(k) + '_E' + str(id_epoch),
+        #         np.concatenate([std, flat_params], 1))
+
+    # import pdb; pdb.set_trace()
+
+    model.train()
+    import os; os._exit(0)
+    import pdb; pdb.set_trace()
 
 
 
@@ -103,7 +142,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 wrapper = ModelWrapper(model, optimizer, criterion, device)
 
 # train the model
-save_path = os.path.join('runs', data_name, "{}_{}_k{}".format(model_name, int(label_noise*100), k))
+save_path = os.path.join('runs2', data_name, "{}_{}_k{}".format(model_name, int(label_noise*100), k))
 if not os.path.exists(save_path):
     os.makedirs(save_path)
 np.savez(os.path.join(save_path, "label_noise.npz"), index=random_index, value=random_part)
@@ -128,15 +167,15 @@ for id_epoch in range(train_epoch):
 
     wrapper.eval()
     test_loss, test_acc = wrapper.eval_all(test_loader)
-    noise_loss, noise_acc = wrapper.eval_all(noise_loader)
+    # noise_loss, noise_acc = wrapper.eval_all(noise_loader)
     print("epoch:{}/{}, batch:{}/{}, testing...".format(id_epoch + 1, train_epoch, id_batch + 1, len(train_loader)))
     print("clean: loss={}, acc={}".format(test_loss, test_acc))
-    print("noise: loss={}, acc={}".format(noise_loss, noise_acc))
+    # print("noise: loss={}, acc={}".format(noise_loss, noise_acc))
     print()
     writer.add_scalar("test acc", test_acc, itr_index)
     writer.add_scalar("test loss", test_loss, itr_index)
-    writer.add_scalar("noise acc", noise_acc, itr_index)
-    writer.add_scalar("noise loss", noise_loss, itr_index)
+    # writer.add_scalar("noise acc", noise_acc, itr_index)
+    # writer.add_scalar("noise loss", noise_loss, itr_index)
     state = {
         'net': model.state_dict(),
         'optim': optimizer.state_dict(),
@@ -145,8 +184,13 @@ for id_epoch in range(train_epoch):
         'itr': itr_index
     }
     torch.save(state, os.path.join(save_path, "ckpt.pkl"))
+
+    # if id_epoch in [0, 10, 25, 50, 100, 300]:
+    #     torch.save(state, os.path.join(save_path, "ckpt" + str(id_epoch) + ".pkl"))
+
     writer.flush()
     # return to train state.
     wrapper.train()
 
 writer.close()
+
